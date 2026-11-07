@@ -48,17 +48,24 @@ def mark_sent(conn, pin_id):
     conn.commit()
 
 # ============ جستجوی پینترست ============
+# قرار دادن کوکی شما به صورت امن
+PINTEREST_COOKIE = """_routing_id="e8490a7c-845d-4e1f-a3bc-1f5ad14b3f23"; csrftoken=118bd5a653f0b89c050338af009b9a49; sessionFunnelEventLogged=1; _b="AZol+Tv0eENIzpjAUXD8R2GqygGnvmKfhiCnaXRgWJwq0cREhNo0fZW+H3OJUbrqVwo="; _auth=1; _pinterest_sess=TWc9PSZkUDcyTEFmQVFlT1FtYzlWSW5iM3dnanBnWC9XZ1hSemtGYzlRZUQ4NjNESVY2cFdoQzZLcEUrTmkzdGYrK092bEh1eUdGNFVwdjBOQmpMZ2VYUi9GWUdISTJGaHlqUEh5UE1KQnZueHEyM3g0N210SkJHZUFhVWR0TGswYmRpcUJKaDdYMy9FTFN5RjkxVnQ3Y1RxdHBjVWU5a29sT244bkR2U0dxN0ZBSFk0WHY2TTFjU21zaUR6M2FEY3AwdDdVNnlyYndHSk93Z29HM0RwZk9yb2UzanRxOWNtOGt4RXI2bjJHQ1ExN0taTE83cWxIRzl5ZjJsTnFWSUtpYUxqdzVIdno3R1JiN1o2Yjl3VWJlZUZKbjloMW5wTjJSQW8rYk1ONW5nSG4wUGhwWkxEMk16MnY1cklPVGlNckFEdjh0RmFFNzA3bHliUUxiVlJiYmlhaXlLYVZra0cyVXM4WWJIOVFkUVl5OTZIbXgzQmtrYXNudkZ1UnVhUlhCNkd5NEpmdnZ3cXlpMmdvVnlWR21MaEpYWmJNTENPOFFERWNFSUM4YVJZeHJyYUlXTithV3hCbi9wYVBZYzUwSUt2a3llTWZRUXp6WmtRNmJqMEVBTnFvTHROMkxXQzlBNExWSnVPandJdXRRKzVRQkNlMzQ0R1ozcW1SNU4ySmd0eTJFMDVhUHdPcHNrS2wrNnFxKzhXd3E3K3poMzVUenVOb0xWZHVSaGFseUZYZm9reDBQQ09hcUFoL0o1TU4yQzhUQ1VnSzd2VHN3Qm5mcEk1ZzBvbVBFMlBJbVRtTGs3R255eHZMT0JNdDdEaHVaODVSNFBhSHN2ZUsxeW53SzVlSFlDeFAzTHlYN2VyWThWTDQ2QTg4YU1zeEZXMlhJd25lMndDMTMvOUdRbDdvbkVYRForQXdGdlBOUGlWaCs1YzE3TW5ZY1dpWUxMeEZBRzVYUXc5K1U4bmt4VUFUeTNuRGRGNnI1NUk4cHRoRXZRN1Ftd25WYlg1N3NBejkycVYyaFcyWXdXZEtoZi91MVZiSC8vZjhnSExyZVB4THBkQkhPN0tVSVhnRStlTzB4ZEI4MWpKUDJnbVB6aGgzSTFkbzIzZTB5M2tZd2o5MkhTV0tpNUsycGtUdEZmS0xWcDk5SXJGb1V0eGZFUVFEelpiUDIvVUhpcnJNNmtUYTRDd0RYRW5QMGxRSVMvT3ZxaUlLUWovZGIxYnpFK0RCTGpTZ3BUa2paa2NFM0VJRG9TMzhYRlFEbXN4VjFGWlgzd0ZUNktqWXZVSDhiU3p0dkxFN1hicjBxamRmRE1Lb3RYWktYQktGV3BMNFE1SFpkc2VINUJNVmd4ZUQxTVB4RkRFZUxWd1ZGUkVvSGZXbDNUaW1mRjJ5WWZnQ1p0TkhyLzVtbFVUVkJ0UnRrYzNYVGpKZ1cxbE9STUIzMVhUWHR4N3YwQW4xVHFXTDh4WDBDN29Sd0FmODNheDJkN3Z4emZPQ2xXNkVCa0lldHFQN1JzSGhOUzhDWFVnVWtEN2I1RWRvUStmSXRoejZEM2J1WTNoOW1jTUNZaWhSS3JNUGNYeEpGN0FieEVEVFNwekl0TGZ2NzgvMXJqWFdPYmk1cndPVVhMK001RnNOeUFoMXBGeFVOc0RSSEw2WGpFOVFYVkZoZE16NkpuVHJXQ2JkR2dQVFlIOU8xa3ZxV2RHdFlwcnpGUjlmZ1Foc2RXVHJTbzBDN0JBR1ZyUGU5Ty96WFBGUFZqUGo5L1g2NzFvSHcrQXQzWFZqYWFiYWs2MkhkYWUmMTBSYkhESXptT1JUWHpyZDlWaUNFY1p1QWdRPQ==; l_o=lyqAIYAGa6TK+tXHYTkIV5c/G+X6c+CQIrWwxQ9RDlcf8Ic5bdo/iS/mkhgKX55vXrYSZ0r9/yOtORRNV6hj27nlDVRsGFlj3b45uYs7RTI8j8w0uqTUnVJBcIxLikIPfNc=; __Secure-s_a=NFhuVU55SEN1UFNkdXFkM2NNRUt0Y3lHcEdrUVl1dW9hNDZMNnpGQmptZUprTm96dEQ4VExXb2U2QStBRU01M3hKeXlIdGNPVHNqc3VKL1FLT3UzYU9FTitnOTNjMUMzdmkrWXNDTk1FVDV1THNCT3E5UkszRmV3alp3S3l6blk4eXdsSm5ZUEdjRjQzQ1lwdHdqc0h0ZWtCMldWUWZIaUcyRTgwYVdEZGxGZ2w5c0p2MzJiOGZyeXBJVDhsLzd2UGgzc3hNSjYxU3VHVXpza1F5QnFBcExKWDRvU2E5TEtsLzUxTTNvTjFscm1wb2Eza21meUtVTWxXRExRNVptbURUZ0IvckJ1SUw1YTJMVlpwOU55MHQ5SVNWdUtqKzNFTE5yeWZsSGROT0tKWUpHNkwrY2I5ZTFITGtZdXhGbjNVamY2MC9aTXdPZnRsVTJFN3ZrOFRhL1AzTXhsYjQ2OTZzeVpaYTRuUUlRamFFakhnQ1Fpa2Frclk5L2NnaWNzYUlRNUxVM01sd2QzS1ZsRDBnc09uRkhYUWpQRnFLZUFqNnVnT3ovTk9WWHBIV1JEN2FSaSsralNkYURiQjhpYkhCZFNxYlBuUVdyRXBnYjNWeVI1ZXhCT1JlZ0QzeWRrSmpyZnF5WDFuQ2ZxVkMwUnFGU2YyY0tORWlBWm5nZ0U2MCtQM1FORlhPNjdBeFpWVVB2RFMzdHkvYngrQnZxdytaT0U3eUx6WWJsdnZETE9jNWVoN3FuM1I0cmhPanFKejhYSno5bzAwNXJtTDVxS2JwYVNUOE1NMWVOaFBiUDB4d0JhdFRHRHg4bjFLcDBXbDFHNUYyQjM4MmIvR3RzUDNtd3R0dFFXYXBIbTZYalpXQmdVRzJCa2FZOEtoY1lsVG05ZDJDZnZCZkljYjVnb2cyaU5rU2k4aW9TajhVMCs3MTBiYjdDdVRwc01PZm1UMFN6ZEpjVkpYMkdaaDcwQjNORkRRb3U4VHhtcUtDbUtCWm84cUNCTlhseGZDUkVCUzBtaXJYSkFiUFBCYUd2RWZhZi9YalJJTFJvMWNJcmFQbmd4czI0VnpaM29saFRUS1ZINHJkOEUybCt4SE5oU0RBbXRrT0FXWVdKam9HbzBqdmx5MGY4RnZGMU1qeGtadDcyQll0cGxlWE0wMFBvWEJzV3MzQXZDUmJaL2hCUnBEY3FpblVNRDU1UTdDYzR5bnovSXVESVFKMnBzUGlFMm16QjlLSG9sbVNTdUdacHRPdkpTdXVscUJXSy90d2pPOTNzYU10V215aDRuMlB1QXViT2Zyak1pWU11VlZ3TmFpNE9GTThqdXpudz0mM2MvdnM5Sm9qRHAxNSt5V3RkL0lNck9qMk1VPQ==; tst=ARDuCFwdDuKCBioAtdXjvoEk-tiMe3sqBYgbU7XQtrfobr_gvECsfrjBX-8mtkYTFbWPyNmSEoIgdvzljaT8ljxjxUzOQlcWXdvyb-4jjW680k02iqjiXA6wH0PCaKU4g4SwFCC5wU4s06dedJPcJwKDcEy73kQGQh633aFv1TFxLF04NViHlrJ5m_kW_QkQS58jHVCVJuGY8rA-; g_state={"i_l":0,"i_ll":1794046108840,"i_e":{"enable_itp_optimization":24},"i_et":1794046108840,"i_b":"By3KV+NADAgndyrzIYBv5wcLCco6FRiPLG/8jXwdM5k"}"""
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
+    "Accept": "application/json, text/javascript, */*, q=0.01",
     "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.pinterest.com/",
+    "X-Requested-With": "XMLHttpRequest",
+    "Cookie": PINTEREST_COOKIE
 }
 
 def search_pinterest(keyword, limit=20):
-    """جستجوی ویدیوهای پینترست با scraping ساده"""
+    """جستجوی ویدیوهای پینترست با scraping"""
     url = "https://www.pinterest.com/resource/BaseSearchResource/get/"
     params = {
         "source_url": f"/search/pins/?q={keyword}",
@@ -73,7 +80,7 @@ def search_pinterest(keyword, limit=20):
         }),
     }
     try:
-        r = requests.get(url, params=params, headers=HEADERS, timeout=20)
+        r = requests.get(url, params=params, headers=HEADERS, timeout=15)
         r.raise_for_status()
         data = r.json()
         results = data.get("resource_response", {}).get("data", {}).get("results", [])
@@ -114,7 +121,7 @@ def search_pinterest(keyword, limit=20):
 # ============ دانلود ویدیو ============
 def download_video(video_url, out_path):
     try:
-        with requests.get(video_url, headers=HEADERS, stream=True, timeout=60) as r:
+        with requests.get(video_url, headers=HEADERS, stream=True, timeout=30) as r:
             r.raise_for_status()
             size = 0
             with open(out_path, "wb") as f:
@@ -147,10 +154,9 @@ def generate_caption(title, keyword):
     )
     url = "https://text.pollinations.ai/" + requests.utils.quote(prompt)
     try:
-        r = requests.get(url, timeout=30)
+        r = requests.get(url, timeout=20)
         if r.status_code == 200 and r.text.strip():
             caption = r.text.strip()
-            # پاک‌سازی
             caption = re.sub(r"[\r\n]+", "\n", caption)[:1000]
             return caption
     except Exception as e:
@@ -165,6 +171,7 @@ def generate_caption(title, keyword):
 
 # ============ ارسال به ایتا ============
 def send_to_eitaa(video_path, caption):
+    # استفاده از API خام برای جلوگیری از خطای کتابخانه
     url = f"https://eitaayar.ir/api/{EITAA_TOKEN}/sendVideo"
     try:
         with open(video_path, "rb") as f:
@@ -172,7 +179,7 @@ def send_to_eitaa(video_path, caption):
             data = {"chat_id": EITAA_CHAT_ID, "caption": caption}
             r = requests.post(url, data=data, files=files, timeout=120)
         if r.status_code == 200:
-            log.info("✅ ارسال موفق")
+            log.info("✅ ارسال موفق به ایتا")
             return True
         log.warning(f"پاسخ ایتا: {r.status_code} - {r.text[:200]}")
         return False
