@@ -1,3 +1,3 @@
 requests==2.31.0
 eitaayarbot==1.0.0
-pinterest-downloader==4.1.0
+pinterest-dl
