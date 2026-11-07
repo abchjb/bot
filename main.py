@@ -13,8 +13,8 @@ EITAA_TOKEN = os.environ.get("EITAA_TOKEN")
 EITAA_CHAT_ID = os.environ.get("EITAA_CHAT_ID")
 
 PINTEREST_KEYWORDS = ["hijab", "حجاب", "hijab fashion", "modest fashion"]
-MAX_POSTS_PER_RUN = 1  # در هر اجرا فقط ۱ ویدیو ارسال شود تا مطمئن شویم کار می‌کند
-MAX_PINS_TO_CHECK = 5  # فقط ۵ پین اول را بررسی کن (نه ۲۵ تا)
+MAX_POSTS_PER_RUN = 1  # فقط ۱ ویدیو در هر اجرا
+MAX_PINS_TO_CHECK = 5
 DB_PATH = "bot.db"
 
 # ============ لاگ ============
@@ -41,12 +41,14 @@ def mark_sent(conn, pin_id):
 
 # ============ جستجو با pinterest-downloader ============
 p = Pinterest()
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+}
 
 def search_videos(keyword, limit=10):
     try:
         result = p.search(keyword, page_size=limit, scope="videos")
-        if not result.get("ok"):
-            return []
+        if not result.get("ok"): return []
         
         videos = []
         for pin in result.get("pins", []):
@@ -55,25 +57,35 @@ def search_videos(keyword, limit=10):
                     "pin_id": str(pin["id"]),
                     "title": pin.get("title") or keyword,
                     "keyword": keyword,
+                    "video_url": pin.get("video", {}).get("url") # گرفتن لینک مستقیم از خروجی جستجو
                 })
         return videos
     except Exception as e:
-        log.warning(f"خطا در جستجوی '{keyword}': {e}")
+        log.warning(f"خطا در جستجو: {e}")
         return []
 
-def download_pin_video(pin_id, out_path):
+def download_direct(video_url, out_path):
+    """دانلود مستقیم با requests"""
     try:
-        result = p.download_pin(pin_id, path=os.path.dirname(out_path))
-        if not result.get("ok"):
+        with requests.get(video_url, headers=HEADERS, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            size = 0
+            with open(out_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        size += len(chunk)
+                        if size > 45 * 1024 * 1024: # 45MB limit
+                            f.close()
+                            os.remove(out_path)
+                            return False
+        if size < 100 * 1024: # < 100KB
+            os.remove(out_path)
             return False
-        
-        downloaded_path = result.get("path")
-        if downloaded_path and os.path.exists(downloaded_path):
-            os.rename(downloaded_path, out_path)
-            return True
-        return False
+        return True
     except Exception as e:
-        log.warning(f"خطا در دانلود پین {pin_id}: {e}")
+        log.warning(f"خطای دانلود مستقیم: {e}")
+        if os.path.exists(out_path): os.remove(out_path)
         return False
 
 # ============ تولید کپشن و ارسال ============
@@ -84,8 +96,7 @@ def generate_caption(title, keyword):
         r = requests.get(url, timeout=15)
         if r.status_code == 200 and r.text.strip():
             return re.sub(r"[\r\n]+", "\n", r.text.strip())[:1000]
-    except Exception:
-        pass
+    except Exception: pass
     return f"🎬 {title}\n\n📌 منبع: Pinterest\n#حجاب #مد_اسلامی #پینترست"
 
 def send_to_eitaa(video_path, caption):
@@ -107,7 +118,7 @@ def send_to_eitaa(video_path, caption):
 # ============ اجرای اصلی ============
 def main():
     if not all([EITAA_TOKEN, EITAA_CHAT_ID]):
-        log.error("تنظیمات (EITAA_TOKEN یا EITAA_CHAT_ID) کامل نیست.")
+        log.error("تنظیمات کامل نیست.")
         return
 
     conn = init_db()
@@ -120,13 +131,8 @@ def main():
         
         videos = search_videos(keyword)
         log.info(f"یافت شد: {len(videos)} ویدیو")
-        
-        # انتخاب تصادفی از بین ویدیوها
         random.shuffle(videos)
-        
-        # فقط تعداد محدودی را بررسی می‌کنیم
         videos = videos[:MAX_PINS_TO_CHECK]
-        log.info(f"بررسی {len(videos)} ویدیو از این لیست...")
 
         for video in videos:
             if sent_count >= MAX_POSTS_PER_RUN: break
@@ -137,15 +143,15 @@ def main():
             log.info(f"تلاش برای دانلود ویدیو {pin_id[:15]}...")
             tmp_path = f"/tmp/{pin_id}.mp4"
             
-            # دانلود
-            if not download_pin_video(pin_id, tmp_path):
-                log.info("دانلود ناموفق بود یا فایل ویدیو نبود. می‌رویم سراغ بعدی...")
-                continue # اگر ویدیو نبود یا دانلود نشد، برو سراغ بعدی
+            # بررسی اینکه آیا لینک مستقیم از جستجو به دست آمده است یا خیر
+            video_url = video.get("video_url")
+            if not video_url:
+                log.info("لینک مستقیم پیدا نشد. رد شدن...")
+                continue
 
-            # بررسی حجم
-            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 100 * 1024:
-                if os.path.exists(tmp_path): os.remove(tmp_path)
-                log.info("حجم فایل خیلی کم بود (احتمالاً عکس بود).")
+            # دانلود با requests
+            if not download_direct(video_url, tmp_path):
+                log.info("دانلود ناموفق بود. رد شدن...")
                 continue
 
             log.info("دانلود موفق! در حال ساخت کپشن...")
@@ -155,8 +161,7 @@ def main():
             if send_to_eitaa(tmp_path, caption):
                 mark_sent(conn, pin_id)
                 sent_count += 1
-                log.info(f"یک ویدیو با موفقیت ارسال شد. استراحت کوتاه...")
-                time.sleep(10) # استراحت بعد از هر ارسال
+                time.sleep(10)
 
             if os.path.exists(tmp_path): os.remove(tmp_path)
 
