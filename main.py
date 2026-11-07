@@ -5,6 +5,7 @@ import sqlite3
 import random
 import logging
 import requests
+import shutil
 from datetime import datetime
 from pinterest_downloader import Pinterest
 
@@ -13,9 +14,10 @@ EITAA_TOKEN = os.environ.get("EITAA_TOKEN")
 EITAA_CHAT_ID = os.environ.get("EITAA_CHAT_ID")
 
 PINTEREST_KEYWORDS = ["hijab", "حجاب", "hijab fashion", "modest fashion"]
-MAX_POSTS_PER_RUN = 1  # فقط ۱ ویدیو در هر اجرا
+MAX_POSTS_PER_RUN = 1
 MAX_PINS_TO_CHECK = 5
 DB_PATH = "bot.db"
+TEMP_DIR = "/tmp/pinterest_downloads"
 
 # ============ لاگ ============
 logging.basicConfig(
@@ -41,9 +43,6 @@ def mark_sent(conn, pin_id):
 
 # ============ جستجو با pinterest-downloader ============
 p = Pinterest()
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-}
 
 def search_videos(keyword, limit=10):
     try:
@@ -57,36 +56,52 @@ def search_videos(keyword, limit=10):
                     "pin_id": str(pin["id"]),
                     "title": pin.get("title") or keyword,
                     "keyword": keyword,
-                    "video_url": pin.get("video", {}).get("url") # گرفتن لینک مستقیم از خروجی جستجو
                 })
         return videos
     except Exception as e:
         log.warning(f"خطا در جستجو: {e}")
         return []
 
-def download_direct(video_url, out_path):
-    """دانلود مستقیم با requests"""
+def download_with_library(pin_id, final_path):
+    """دانلود با استفاده از خود کتابخانه و انتقال فایل به مسیر نهایی"""
     try:
-        with requests.get(video_url, headers=HEADERS, stream=True, timeout=30) as r:
-            r.raise_for_status()
-            size = 0
-            with open(out_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        size += len(chunk)
-                        if size > 45 * 1024 * 1024: # 45MB limit
-                            f.close()
-                            os.remove(out_path)
-                            return False
-        if size < 100 * 1024: # < 100KB
-            os.remove(out_path)
+        # پوشه موقت را خالی می‌کنیم
+        if os.path.exists(TEMP_DIR):
+            shutil.rmtree(TEMP_DIR)
+        os.makedirs(TEMP_DIR, exist_ok=True)
+
+        # از کتابخانه می‌خواهیم در این پوشه دانلود کند
+        result = p.download_pin(pin_id, path=TEMP_DIR)
+        
+        if not result.get("ok"):
+            log.info("کتابخانه نتوانست دانلود کند.")
             return False
+
+        # حالا ببینیم چه فایلی در پوشه موقت ساخته شده است
+        files = os.listdir(TEMP_DIR)
+        if not files:
+            log.info("هیچ فایلی دانلود نشد.")
+            return False
+
+        # اولین فایل (که ویدیو است) را برمی‌داریم
+        downloaded_file = os.path.join(TEMP_DIR, files[0])
+        
+        # بررسی حجم (حداقل ۱۰۰ کیلوبایت)
+        if os.path.getsize(downloaded_file) < 100 * 1024:
+            log.info("فایل خیلی کوچک است (احتمالاً عکس است).")
+            return False
+
+        # انتقال به مسیر نهایی
+        shutil.move(downloaded_file, final_path)
         return True
+
     except Exception as e:
-        log.warning(f"خطای دانلود مستقیم: {e}")
-        if os.path.exists(out_path): os.remove(out_path)
+        log.warning(f"خطا در دانلود با کتابخانه: {e}")
         return False
+    finally:
+        # پاکسازی پوشه موقت
+        if os.path.exists(TEMP_DIR):
+            shutil.rmtree(TEMP_DIR, ignore_errors=True)
 
 # ============ تولید کپشن و ارسال ============
 def generate_caption(title, keyword):
@@ -143,14 +158,8 @@ def main():
             log.info(f"تلاش برای دانلود ویدیو {pin_id[:15]}...")
             tmp_path = f"/tmp/{pin_id}.mp4"
             
-            # بررسی اینکه آیا لینک مستقیم از جستجو به دست آمده است یا خیر
-            video_url = video.get("video_url")
-            if not video_url:
-                log.info("لینک مستقیم پیدا نشد. رد شدن...")
-                continue
-
-            # دانلود با requests
-            if not download_direct(video_url, tmp_path):
+            # دانلود با کتابخانه
+            if not download_with_library(pin_id, tmp_path):
                 log.info("دانلود ناموفق بود. رد شدن...")
                 continue
 
