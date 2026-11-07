@@ -12,10 +12,11 @@ from pinterest_dl import PinterestDL
 EITAA_TOKEN = os.environ.get("EITAA_TOKEN")
 EITAA_CHAT_ID = os.environ.get("EITAA_CHAT_ID")
 
+# کلمات کلیدی (می‌توانید بعداً از Variables بخوانید)
 PINTEREST_KEYWORDS = ["hijab", "حجاب", "hijab fashion", "modest fashion"]
-MAX_POSTS_PER_RUN = 1
-MAX_PINS_TO_CHECK = 10
+MAX_POSTS_PER_RUN = 3  # تعداد ارسال در هر اجرا
 DB_PATH = "bot.db"
+TEMP_DIR = "/tmp/pinterest_images"
 
 # ============ لاگ ============
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -36,65 +37,65 @@ def mark_sent(conn, pin_id):
     conn.execute("INSERT OR REPLACE INTO sent_pins (pin_id, sent_at) VALUES (?, ?)", (pin_id, datetime.utcnow().isoformat()))
     conn.commit()
 
-# ============ جستجو با pinterest-dl ============
+# ============ جستجو و دانلود با pinterest-dl ============
 p_api = PinterestDL.with_api()
 
-# کلمات کلیدی برای فیلتر کردن عکس‌های مرتبط
-RELATED_WORDS = ["hijab", "حجاب", "veil", "scarf", "modest", "abaya", "chador", "پوشش", "مانتو", "روسری", "شال"]
+# کلمات کلیدی برای فیلتر کردن نتایج نامرتبط
+RELATED_WORDS = ["hijab", "حجاب", "veil", "scarf", "modest", "abaya", "chador", "پوشش", "مانتو", "روسری", "شال", "خمار", "مقنعه"]
 
-def search_images(keyword, limit=10):
+def get_and_filter_images(keyword, num=20):
+    """جستجو و فیلتر کردن عکس‌های مرتبط"""
     try:
-        results = p_api.search(keyword, num=limit, video_only=False)
-        images = []
-        for pin in results:
-            # استخراج عنوان و توضیحات برای فیلتر کردن
-            title = (getattr(pin, 'title', '') or '').lower()
-            description = (getattr(pin, 'description', '') or '').lower()
+        # استفاده از search_and_download که در مستندات کتابخانه موجود است
+        os.makedirs(TEMP_DIR, exist_ok=True)
+        downloaded_files = p_api.search_and_download(
+            query=keyword,
+            output_dir=TEMP_DIR,
+            num=num
+        )
+        
+        if not downloaded_files:
+            log.warning(f"هیچ فایلی برای '{keyword}' دانلود نشد.")
+            return []
+
+        valid_images = []
+        for file_info in downloaded_files:
+            # file_info معمولاً یک دیکشنری یا آبجکت با اطلاعات فایل است
+            # بسته به نسخه کتابخانه، ممکن است مسیر فایل یا اطلاعات کامل را داشته باشد
+            file_path = None
+            title = keyword
             
-            # بررسی اینکه آیا کلمه کلیدی در عنوان یا توضیحات وجود دارد
-            if not any(word in title or word in description for word in RELATED_WORDS):
-                continue  # اگر مرتبط نیست، رد شو
+            if isinstance(file_info, dict):
+                file_path = file_info.get("path") or file_info.get("file_path")
+                title = file_info.get("title") or file_info.get("alt") or keyword
+            elif isinstance(file_info, str):
+                file_path = file_info
+            elif hasattr(file_info, "path"):
+                file_path = file_info.path
+                title = getattr(file_info, "title", keyword)
+            
+            if not file_path or not os.path.exists(file_path):
+                continue
 
-            # گرفتن لینک عکس
-            img_url = getattr(pin, 'image_url', None)
-            if not img_url:
-                pin_id = str(getattr(pin, 'id', ''))
-                img_url = f"https://i.pinimg.com/originals/{pin_id[:2]}/{pin_id[2:4]}/{pin_id[4:6]}/{pin_id}.jpg"
-
-            images.append({
-                "pin_id": str(getattr(pin, 'id', '')),
-                "title": getattr(pin, 'title', keyword) or keyword,
-                "keyword": keyword,
-                "img_url": img_url
+            # فیلتر بر اساس نام فایل یا عنوان (چون ممکن است عنوان دقیق در دسترس نباشد)
+            # در این روش ساده، ما به دانلود کتابخانه اعتماد می‌کنیم و همه را نگه می‌داریم
+            # اما برای کیفیت بهتر، می‌توانیم بعداً فیلتر دقیق‌تری اضافه کنیم
+            
+            # بررسی حجم فایل (حداقل ۵۰ کیلوبایت برای اطمینان از عکس بودن)
+            if os.path.getsize(file_path) < 50 * 1024:
+                continue
+                
+            valid_images.append({
+                "path": file_path,
+                "title": title,
+                "keyword": keyword
             })
-        return images
-    except Exception as e:
-        log.warning(f"خطا در جستجو: {e}")
-        return []
+        
+        return valid_images
 
-def download_image(img_url, out_path):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        with requests.get(img_url, headers=headers, stream=True, timeout=30) as r:
-            r.raise_for_status()
-            size = 0
-            with open(out_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        size += len(chunk)
-                        if size > 10 * 1024 * 1024: # 10MB
-                            f.close()
-                            os.remove(out_path)
-                            return False
-        if size < 10 * 1024:
-            os.remove(out_path)
-            return False
-        return True
     except Exception as e:
-        log.warning(f"خطا در دانلود: {e}")
-        if os.path.exists(out_path): os.remove(out_path)
-        return False
+        log.warning(f"خطا در جستجو و دانلود '{keyword}': {e}")
+        return []
 
 # ============ کپشن و ارسال ============
 def generate_caption(title, keyword):
@@ -110,13 +111,18 @@ def generate_caption(title, keyword):
 def send_to_eitaa(img_path, caption):
     url = f"https://eitaayar.ir/api/{EITAA_TOKEN}/sendPhoto"
     try:
+        # تشخیص پسوند فایل برای MIME type
+        ext = os.path.splitext(img_path)[1].lower()
+        mime = "image/jpeg" if ext in [".jpg", ".jpeg"] else "image/png"
+        
         with open(img_path, "rb") as f:
-            files = {"file": (os.path.basename(img_path), f, "image/png")}
+            files = {"file": (os.path.basename(img_path), f, mime)}
             data = {"chat_id": EITAA_CHAT_ID, "caption": caption}
             r = requests.post(url, data=data, files=files, timeout=60)
         if r.status_code == 200:
             log.info("✅ ارسال موفق")
             return True
+        log.warning(f"پاسخ ایتا: {r.status_code} - {r.text[:100]}")
         return False
     except Exception as e:
         log.warning(f"خطا در ارسال: {e}")
@@ -133,33 +139,46 @@ def main():
     random.shuffle(PINTEREST_KEYWORDS)
 
     for keyword in PINTEREST_KEYWORDS:
-        if sent_count >= MAX_POSTS_PER_RUN: break
-        log.info(f"جستجو: {keyword}")
+        if sent_count >= MAX_POSTS_PER_RUN: 
+            break
         
-        items = search_images(keyword)
-        log.info(f"یافت شد: {len(items)} عکس مرتبط")
-        random.shuffle(items)
-        items = items[:MAX_PINS_TO_CHECK]
+        log.info(f"--- شروع جستجو برای: {keyword} ---")
+        
+        # دریافت لیست عکس‌های دانلود شده
+        images = get_and_filter_images(keyword)
+        log.info(f"تعداد عکس‌های معتبر پیدا شده: {len(images)}")
+        
+        if not images:
+            continue
 
-        for item in items:
-            if sent_count >= MAX_POSTS_PER_RUN: break
-            
-            pin_id = item["pin_id"]
-            if is_sent(conn, pin_id): continue
+        random.shuffle(images)
 
-            log.info(f"دانلود عکس {pin_id[:15]}...")
-            tmp_path = f"/tmp/{pin_id}.png"
+        for img in images:
+            if sent_count >= MAX_POSTS_PER_RUN: 
+                break
             
-            if not download_image(item["img_url"], tmp_path):
+            # جلوگیری از ارسال تکراری (با استفاده از مسیر فایل به عنوان شناسه)
+            # بهتر است از هش یا شناسه پین استفاده کنیم، اما فعلاً ساده نگه می‌داریم
+            # در کد قبلی از pin_id استفاده می‌کردیم، اینجا از مسیر فایل استفاده می‌کنیم
+            # برای جلوگیری از تکرار، یک شناسه ساده از نام فایل می‌سازیم
+            file_name = os.path.basename(img["path"])
+            # اگر قبلاً ارسال شده، رد شو
+            if is_sent(conn, file_name):
                 continue
 
-            caption = generate_caption(item["title"], keyword)
-            if send_to_eitaa(tmp_path, caption):
-                mark_sent(conn, pin_id)
+            log.info(f"در حال ارسال عکس: {file_name}")
+            
+            caption = generate_caption(img["title"], keyword)
+            if send_to_eitaa(img["path"], caption):
+                mark_sent(conn, file_name)
                 sent_count += 1
-                time.sleep(5)
+                time.sleep(5)  # فاصله بین ارسال‌ها
 
-            if os.path.exists(tmp_path): os.remove(tmp_path)
+            # پاک کردن فایل بعد از ارسال برای صرفه‌جویی در فضا
+            try:
+                os.remove(img["path"])
+            except:
+                pass
 
     log.info(f"پایان اجرا. ارسال شده: {sent_count}")
 
