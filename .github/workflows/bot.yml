@@ -2,7 +2,8 @@ name: Pinterest2Eitaa Bot
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    # هر ۳ ساعت یک بار (ساعت UTC)
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 jobs:
@@ -26,5 +27,4 @@ jobs:
         env:
           EITAA_TOKEN: ${{ secrets.EITAA_TOKEN }}
           EITAA_CHAT_ID: ${{ secrets.EITAA_CHAT_ID }}
-          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
         run: python main.py
