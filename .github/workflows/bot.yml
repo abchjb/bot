@@ -26,4 +26,5 @@ jobs:
         env:
           EITAA_TOKEN: ${{ secrets.EITAA_TOKEN }}
           EITAA_CHAT_ID: ${{ secrets.EITAA_CHAT_ID }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
         run: python main.py
