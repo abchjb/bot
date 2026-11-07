@@ -6,7 +6,7 @@ import random
 import logging
 import requests
 from datetime import datetime
-from pinterest_dl import PinterestDL  # کتابخانه جدید
+from pinterest_dl import PinterestDL
 
 # ============ تنظیمات ============
 EITAA_TOKEN = os.environ.get("EITAA_TOKEN")
@@ -14,7 +14,7 @@ EITAA_CHAT_ID = os.environ.get("EITAA_CHAT_ID")
 
 PINTEREST_KEYWORDS = ["hijab", "حجاب", "hijab fashion", "modest fashion"]
 MAX_POSTS_PER_RUN = 1
-MAX_PINS_TO_CHECK = 5
+MAX_PINS_TO_CHECK = 10
 DB_PATH = "bot.db"
 
 # ============ لاگ ============
@@ -37,65 +37,86 @@ def mark_sent(conn, pin_id):
     conn.commit()
 
 # ============ جستجو با pinterest-dl ============
-# ایجاد یک نمونه از API
 p_api = PinterestDL.with_api()
 
-def search_videos(keyword, num=10):
-    """جستجوی ویدیوها با کتابخانه pinterest-dl"""
+# کلمات کلیدی برای فیلتر کردن عکس‌های مرتبط
+RELATED_WORDS = ["hijab", "حجاب", "veil", "scarf", "modest", "abaya", "chador", "پوشش", "مانتو", "روسری", "شال"]
+
+def search_images(keyword, limit=10):
     try:
-        # این کتابخانه متد جستجو دارد که می‌تواند ویدیوها را فیلتر کند
-        results = p_api.search(keyword, num=num, video_only=True)
-        videos = []
+        results = p_api.search(keyword, num=limit, video_only=False)
+        images = []
         for pin in results:
-            videos.append({
-                "pin_id": str(pin.id),
-                "title": pin.title or keyword,
+            # استخراج عنوان و توضیحات برای فیلتر کردن
+            title = (getattr(pin, 'title', '') or '').lower()
+            description = (getattr(pin, 'description', '') or '').lower()
+            
+            # بررسی اینکه آیا کلمه کلیدی در عنوان یا توضیحات وجود دارد
+            if not any(word in title or word in description for word in RELATED_WORDS):
+                continue  # اگر مرتبط نیست، رد شو
+
+            # گرفتن لینک عکس
+            img_url = getattr(pin, 'image_url', None)
+            if not img_url:
+                pin_id = str(getattr(pin, 'id', ''))
+                img_url = f"https://i.pinimg.com/originals/{pin_id[:2]}/{pin_id[2:4]}/{pin_id[4:6]}/{pin_id}.jpg"
+
+            images.append({
+                "pin_id": str(getattr(pin, 'id', '')),
+                "title": getattr(pin, 'title', keyword) or keyword,
                 "keyword": keyword,
-                "url": pin.url
+                "img_url": img_url
             })
-        return videos
+        return images
     except Exception as e:
         log.warning(f"خطا در جستجو: {e}")
         return []
 
-def download_video_with_cookie(pin_url, out_path):
-    """دانلود ویدیو با استفاده از کوکی (برای دور زدن محدودیت IP)"""
+def download_image(img_url, out_path):
     try:
-        # نکته مهم: برای استفاده از کوکی، باید کوکی مرورگر خود را در گیت‌هاب تنظیم کنید
-        # یا از یک فایل کوکی استفاده کنید. فعلاً سعی می‌کنیم بدون کوکی کار کنیم.
-        result = p_api.scrape_and_download(pin_url, output_dir=os.path.dirname(out_path))
-        
-        if result and os.path.exists(result[0]):
-            # انتقال فایل به مسیر مورد نظر
-            os.rename(result[0], out_path)
-            return True
-        return False
+        headers = {"User-Agent": "Mozilla/5.0"}
+        with requests.get(img_url, headers=headers, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            size = 0
+            with open(out_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        size += len(chunk)
+                        if size > 10 * 1024 * 1024: # 10MB
+                            f.close()
+                            os.remove(out_path)
+                            return False
+        if size < 10 * 1024:
+            os.remove(out_path)
+            return False
+        return True
     except Exception as e:
-        log.warning(f"خطا در دانلود ویدیو: {e}")
+        log.warning(f"خطا در دانلود: {e}")
+        if os.path.exists(out_path): os.remove(out_path)
         return False
 
 # ============ کپشن و ارسال ============
 def generate_caption(title, keyword):
-    prompt = f"یک کپشن کوتاه و جذاب فارسی (حداکثر ۲۵۰ کاراکتر) برای یک ویدیو با موضوع '{keyword}' و عنوان '{title}' بنویس. در انتها ۳ هشتگ مرتبط با حجاب و مد اسلامی اضافه کن. فقط متن کپشن را برگردان."
+    prompt = f"یک کپشن کوتاه و جذاب فارسی (حداکثر ۲۵۰ کاراکتر) برای یک عکس با موضوع '{keyword}' و عنوان '{title}' بنویس. در انتها ۳ هشتگ مرتبط با حجاب و مد اسلامی اضافه کن. فقط متن کپشن را برگردان."
     url = "https://text.pollinations.ai/" + requests.utils.quote(prompt)
     try:
         r = requests.get(url, timeout=15)
         if r.status_code == 200 and r.text.strip():
             return re.sub(r"[\r\n]+", "\n", r.text.strip())[:1000]
     except Exception: pass
-    return f"🎬 {title}\n\n📌 منبع: Pinterest\n#حجاب #مد_اسلامی #پینترست"
+    return f"🖼 {title}\n\n📌 منبع: Pinterest\n#حجاب #مد_اسلامی #پینترست"
 
-def send_video_to_eitaa(video_path, caption):
-    url = f"https://eitaayar.ir/api/{EITAA_TOKEN}/sendVideo"
+def send_to_eitaa(img_path, caption):
+    url = f"https://eitaayar.ir/api/{EITAA_TOKEN}/sendPhoto"
     try:
-        with open(video_path, "rb") as f:
-            files = {"file": (os.path.basename(video_path), f, "video/mp4")}
+        with open(img_path, "rb") as f:
+            files = {"file": (os.path.basename(img_path), f, "image/png")}
             data = {"chat_id": EITAA_CHAT_ID, "caption": caption}
-            r = requests.post(url, data=data, files=files, timeout=120)
+            r = requests.post(url, data=data, files=files, timeout=60)
         if r.status_code == 200:
-            log.info("✅ ارسال ویدیو موفق بود!")
+            log.info("✅ ارسال موفق")
             return True
-        log.warning(f"پاسخ ایتا: {r.status_code} - {r.text[:200]}")
         return False
     except Exception as e:
         log.warning(f"خطا در ارسال: {e}")
@@ -115,37 +136,28 @@ def main():
         if sent_count >= MAX_POSTS_PER_RUN: break
         log.info(f"جستجو: {keyword}")
         
-        videos = search_videos(keyword)
-        log.info(f"یافت شد: {len(videos)} ویدیو")
-        random.shuffle(videos)
-        videos = videos[:MAX_PINS_TO_CHECK]
+        items = search_images(keyword)
+        log.info(f"یافت شد: {len(items)} عکس مرتبط")
+        random.shuffle(items)
+        items = items[:MAX_PINS_TO_CHECK]
 
-        for video in videos:
+        for item in items:
             if sent_count >= MAX_POSTS_PER_RUN: break
             
-            pin_id = video["pin_id"]
+            pin_id = item["pin_id"]
             if is_sent(conn, pin_id): continue
 
-            log.info(f"تلاش برای دانلود ویدیو {pin_id[:15]}...")
-            tmp_path = f"/tmp/{pin_id}.mp4"
+            log.info(f"دانلود عکس {pin_id[:15]}...")
+            tmp_path = f"/tmp/{pin_id}.png"
             
-            if not download_video_with_cookie(video["url"], tmp_path):
-                log.info("دانلود ویدیو ناموفق بود (احتمالاً به دلیل محدودیت IP گیت‌هاب).")
+            if not download_image(item["img_url"], tmp_path):
                 continue
 
-            # بررسی حجم
-            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 100 * 1024:
-                if os.path.exists(tmp_path): os.remove(tmp_path)
-                continue
-
-            log.info("دانلود موفق! در حال ساخت کپشن...")
-            caption = generate_caption(video["title"], keyword)
-            
-            log.info("در حال ارسال به ایتا...")
-            if send_video_to_eitaa(tmp_path, caption):
+            caption = generate_caption(item["title"], keyword)
+            if send_to_eitaa(tmp_path, caption):
                 mark_sent(conn, pin_id)
                 sent_count += 1
-                time.sleep(10)
+                time.sleep(5)
 
             if os.path.exists(tmp_path): os.remove(tmp_path)
 
