@@ -1,0 +1,30 @@
+name: Pinterest2Eitaa Bot
+
+on:
+  schedule:
+    # هر ۶ ساعت یک بار (ساعت UTC)
+    - cron: "0 */6 * * *"
+  workflow_dispatch:   # اجرای دستی برای تست
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          EITAA_TOKEN: ${{ secrets.EITAA_TOKEN }}
+          EITAA_CHAT_ID: ${{ secrets.EITAA_CHAT_ID }}
+        run: python main.py
