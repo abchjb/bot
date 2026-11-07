@@ -1,7 +1,6 @@
 import os
 import re
 import time
-import json
 import sqlite3
 import random
 import logging
@@ -41,59 +40,39 @@ def mark_sent(conn, pin_id):
 p = Pinterest()
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
 }
 
-def search_videos(keyword, limit=10):
+def search_images(keyword, limit=10):
+    """تغییر: جستجوی عکس به جای ویدیو"""
     try:
-        result = p.search(keyword, page_size=limit, scope="videos")
+        result = p.search(keyword, page_size=limit, scope="images") # scope را به images تغییر دادیم
         if not result.get("ok"): return []
         
-        videos = []
+        images = []
         for pin in result.get("pins", []):
-            if pin.get("media_type") == "video" and pin.get("id"):
-                videos.append({
+            # بررسی اینکه پین عکس است
+            if pin.get("media_type") == "image" and pin.get("id"):
+                # لینک عکس معمولاً در فیلد image یا images است
+                img_url = pin.get("image", {}).get("url") or pin.get("images", {}).get("orig", {}).get("url")
+                if not img_url:
+                    # تلاش برای پیدا کردن لینک از طریق شناسه
+                    img_url = f"https://i.pinimg.com/originals/{pin['id'][:2]}/{pin['id'][2:4]}/{pin['id'][4:6]}/{pin['id']}.jpg"
+                
+                images.append({
                     "pin_id": str(pin["id"]),
                     "title": pin.get("title") or keyword,
                     "keyword": keyword,
+                    "img_url": img_url
                 })
-        return videos
+        return images
     except Exception as e:
         log.warning(f"خطا در جستجو: {e}")
         return []
 
-def extract_mp4_from_html(pin_id):
-    """رفتن به صفحه پین و استخراج لینک mp4 از داخل کدهای HTML"""
-    pin_url = f"https://www.pinterest.com/pin/{pin_id}/"
+def download_image(img_url, out_path):
+    """دانلود مستقیم عکس"""
     try:
-        r = requests.get(pin_url, headers=HEADERS, timeout=20)
-        r.raise_for_status()
-        
-        # جستجوی الگوی لینک mp4 در HTML
-        # پینترست معمولاً لینک‌ها را در تگ‌های <script> یا <video> قرار می‌دهد
-        patterns = [
-            r'"url":"(https://v\.pinimg\.com/videos/[^"]+\.mp4)"',
-            r'"contentUrl":"(https://v\.pinimg\.com/videos/[^"]+\.mp4)"',
-            r'src="(https://v\.pinimg\.com/videos/[^"]+\.mp4)"'
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, r.text)
-            if match:
-                url = match.group(1)
-                # پینترست گاهی لینک‌ها را با \u002F فرار می‌دهد
-                url = url.replace("\\u002F", "/")
-                return url
-        return None
-    except Exception as e:
-        log.warning(f"خطا در استخراج از HTML: {e}")
-        return None
-
-def download_direct(video_url, out_path):
-    """دانلود مستقیم با requests"""
-    try:
-        with requests.get(video_url, headers=HEADERS, stream=True, timeout=30) as r:
+        with requests.get(img_url, headers=HEADERS, stream=True, timeout=30) as r:
             r.raise_for_status()
             size = 0
             with open(out_path, "wb") as f:
@@ -101,39 +80,40 @@ def download_direct(video_url, out_path):
                     if chunk:
                         f.write(chunk)
                         size += len(chunk)
-                        if size > 45 * 1024 * 1024: # 45MB limit
+                        if size > 10 * 1024 * 1024: # محدودیت ۱۰ مگابایت برای عکس
                             f.close()
                             os.remove(out_path)
                             return False
-        if size < 100 * 1024: # < 100KB
+        if size < 10 * 1024: # < 10KB
             os.remove(out_path)
             return False
         return True
     except Exception as e:
-        log.warning(f"خطای دانلود مستقیم: {e}")
+        log.warning(f"خطا در دانلود عکس: {e}")
         if os.path.exists(out_path): os.remove(out_path)
         return False
 
 # ============ تولید کپشن و ارسال ============
 def generate_caption(title, keyword):
-    prompt = f"یک کپشن کوتاه و جذاب فارسی (حداکثر ۲۵۰ کاراکتر) برای یک ویدیو با موضوع '{keyword}' و عنوان '{title}' بنویس. در انتها ۳ هشتگ مرتبط با حجاب و مد اسلامی اضافه کن. فقط متن کپشن را برگردان."
+    prompt = f"یک کپشن کوتاه و جذاب فارسی (حداکثر ۲۵۰ کاراکتر) برای یک عکس با موضوع '{keyword}' و عنوان '{title}' بنویس. در انتها ۳ هشتگ مرتبط با حجاب و مد اسلامی اضافه کن. فقط متن کپشن را برگردان."
     url = "https://text.pollinations.ai/" + requests.utils.quote(prompt)
     try:
         r = requests.get(url, timeout=15)
         if r.status_code == 200 and r.text.strip():
             return re.sub(r"[\r\n]+", "\n", r.text.strip())[:1000]
     except Exception: pass
-    return f"🎬 {title}\n\n📌 منبع: Pinterest\n#حجاب #مد_اسلامی #پینترست"
+    return f"🖼 {title}\n\n📌 منبع: Pinterest\n#حجاب #مد_اسلامی #پینترست"
 
-def send_to_eitaa(video_path, caption):
-    url = f"https://eitaayar.ir/api/{EITAA_TOKEN}/sendVideo"
+def send_to_eitaa(img_path, caption):
+    """ارسال عکس به ایتا (sendPhoto)"""
+    url = f"https://eitaayar.ir/api/{EITAA_TOKEN}/sendPhoto" # تغییر به sendPhoto
     try:
-        with open(video_path, "rb") as f:
-            files = {"file": (os.path.basename(video_path), f, "video/mp4")}
+        with open(img_path, "rb") as f:
+            files = {"file": (os.path.basename(img_path), f, "image/jpeg")}
             data = {"chat_id": EITAA_CHAT_ID, "caption": caption}
             r = requests.post(url, data=data, files=files, timeout=60)
         if r.status_code == 200:
-            log.info("✅ ارسال موفق به ایتا")
+            log.info("✅ ارسال موفق عکس به ایتا")
             return True
         log.warning(f"پاسخ ایتا: {r.status_code} - {r.text[:200]}")
         return False
@@ -155,39 +135,32 @@ def main():
         if sent_count >= MAX_POSTS_PER_RUN: break
         log.info(f"جستجو: {keyword}")
         
-        videos = search_videos(keyword)
-        log.info(f"یافت شد: {len(videos)} ویدیو")
-        random.shuffle(videos)
-        videos = videos[:MAX_PINS_TO_CHECK]
+        images = search_images(keyword)
+        log.info(f"یافت شد: {len(images)} عکس")
+        random.shuffle(images)
+        images = images[:MAX_PINS_TO_CHECK]
 
-        for video in videos:
+        for img in images:
             if sent_count >= MAX_POSTS_PER_RUN: break
             
-            pin_id = video["pin_id"]
+            pin_id = img["pin_id"]
             if is_sent(conn, pin_id): continue
 
-            log.info(f"تلاش برای ویدیو {pin_id[:15]}...")
+            log.info(f"تلاش برای دانلود عکس {pin_id[:15]}...")
+            tmp_path = f"/tmp/{pin_id}.jpg"
             
-            # مرحله ۱: استخراج لینک mp4 از HTML پین
-            video_url = extract_mp4_from_html(pin_id)
-            if not video_url:
-                log.info("لینک mp4 در صفحه پیدا نشد (احتمالاً ویدیو نیست).")
+            if not download_image(img["img_url"], tmp_path):
+                log.info("دانلود عکس ناموفق بود.")
                 continue
 
-            # مرحله ۲: دانلود
-            tmp_path = f"/tmp/{pin_id}.mp4"
-            if not download_direct(video_url, tmp_path):
-                log.info("دانلود ناموفق بود.")
-                continue
-
-            # مرحله ۳: ارسال
             log.info("دانلود موفق! در حال ساخت کپشن...")
-            caption = generate_caption(video["title"], keyword)
+            caption = generate_caption(img["title"], keyword)
             
+            log.info("در حال ارسال به ایتا...")
             if send_to_eitaa(tmp_path, caption):
                 mark_sent(conn, pin_id)
                 sent_count += 1
-                time.sleep(10)
+                time.sleep(5)
 
             if os.path.exists(tmp_path): os.remove(tmp_path)
 
