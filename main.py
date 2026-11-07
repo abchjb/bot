@@ -11,10 +11,12 @@ from pinterest_downloader import Pinterest
 # ============ تنظیمات ============
 EITAA_TOKEN = os.environ.get("EITAA_TOKEN")
 EITAA_CHAT_ID = os.environ.get("EITAA_CHAT_ID")
+# کلمات کلیدی را از متغیر محیطی می‌خوانیم (در گیت‌هاب تعریف می‌شود)
+KEYWORDS_STR = os.environ.get("SEARCH_KEYWORDS", "hijab,حجاب,hijab fashion,modest fashion")
+PINTEREST_KEYWORDS = [k.strip() for k in KEYWORDS_STR.split(",") if k.strip()]
 
-PINTEREST_KEYWORDS = ["hijab", "حجاب", "hijab fashion", "modest fashion"]
 MAX_POSTS_PER_RUN = 1
-MAX_PINS_TO_CHECK = 5
+MAX_PINS_TO_CHECK = 10
 DB_PATH = "bot.db"
 
 # ============ لاگ ============
@@ -42,15 +44,24 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 }
 
-def search_items(keyword, limit=10):
+def search_and_filter(keyword, limit=20):
     try:
         result = p.search(keyword, page_size=limit, scope="videos")
         if not result.get("ok"): return []
         
         items = []
+        # کلمات کلیدی برای فیلتر کردن نتایج نامربوط
+        related_words = ["hijab", "حجاب", "veil", "scarf", "modest", "abaya", "chador", "پوشش", "مانتو", "روسری"]
+        
         for pin in result.get("pins", []):
             if pin.get("media_type") == "video" and pin.get("id"):
-                # گرفتن لینک عکس کاور
+                title = (pin.get("title") or "").lower()
+                desc = (pin.get("description") or "").lower()
+                
+                # فیلتر کردن: اگر هیچ کدام از کلمات مرتبط در عنوان یا توضیحات نبود، رد شو
+                if not any(word in title or word in desc for word in related_words):
+                    continue
+
                 img_url = pin.get("image", {}).get("url") or pin.get("images", {}).get("orig", {}).get("url")
                 if not img_url:
                     pin_id = str(pin["id"])
@@ -77,22 +88,26 @@ def download_image(img_url, out_path):
                     if chunk:
                         f.write(chunk)
                         size += len(chunk)
-                        if size > 10 * 1024 * 1024: # 10MB
+                        if size > 10 * 1024 * 1024:
                             f.close()
                             os.remove(out_path)
                             return False
-        if size < 10 * 1024: # < 10KB
+        if size < 10 * 1024:
             os.remove(out_path)
             return False
         return True
     except Exception as e:
-        log.warning(f"خطا در دانلود عکس: {e}")
+        log.warning(f"خطا در دانلود: {e}")
         if os.path.exists(out_path): os.remove(out_path)
         return False
 
-# ============ تولید کپشن و ارسال ============
+# ============ کپشن و ارسال ============
 def generate_caption(title, keyword):
-    prompt = f"یک کپشن کوتاه و جذاب فارسی (حداکثر ۲۵۰ کاراکتر) برای یک عکس با موضوع '{keyword}' و عنوان '{title}' بنویس. در انتها ۳ هشتگ مرتبط با حجاب و مد اسلامی اضافه کن. فقط متن کپشن را برگردان."
+    prompt = (
+        f"یک کپشن کوتاه و جذاب فارسی (حداکثر ۲۵۰ کاراکتر) برای یک عکس با موضوع '{keyword}' بنویس. "
+        f"عنوان اصلی عکس: '{title}'. "
+        f"در انتها ۳ هشتگ مرتبط با حجاب و مد اسلامی اضافه کن. فقط متن کپشن را برگردان."
+    )
     url = "https://text.pollinations.ai/" + requests.utils.quote(prompt)
     try:
         r = requests.get(url, timeout=15)
@@ -105,16 +120,11 @@ def send_to_eitaa(img_path, caption):
     url = f"https://eitaayar.ir/api/{EITAA_TOKEN}/sendPhoto"
     try:
         with open(img_path, "rb") as f:
-            # تغییر فرمت به png
             files = {"file": (os.path.basename(img_path), f, "image/png")}
             data = {"chat_id": EITAA_CHAT_ID, "caption": caption}
             r = requests.post(url, data=data, files=files, timeout=60)
-        
-        # چاپ پاسخ کامل برای دیباگ
-        log.info(f"پاسخ ایتایار: {r.status_code} - {r.text}")
-        
         if r.status_code == 200:
-            log.info("✅ ارسال موفق عکس به ایتا")
+            log.info("✅ ارسال موفق")
             return True
         return False
     except Exception as e:
@@ -127,6 +137,7 @@ def main():
         log.error("تنظیمات کامل نیست.")
         return
 
+    log.info(f"کلمات کلیدی فعال: {PINTEREST_KEYWORDS}")
     conn = init_db()
     sent_count = 0
     random.shuffle(PINTEREST_KEYWORDS)
@@ -135,8 +146,8 @@ def main():
         if sent_count >= MAX_POSTS_PER_RUN: break
         log.info(f"جستجو: {keyword}")
         
-        items = search_items(keyword)
-        log.info(f"یافت شد: {len(items)} آیتم")
+        items = search_and_filter(keyword)
+        log.info(f"یافت شد: {len(items)} آیتم مرتبط")
         random.shuffle(items)
         items = items[:MAX_PINS_TO_CHECK]
 
@@ -146,17 +157,13 @@ def main():
             pin_id = item["pin_id"]
             if is_sent(conn, pin_id): continue
 
-            log.info(f"تلاش برای دانلود عکس {pin_id[:15]}...")
-            tmp_path = f"/tmp/{pin_id}.png" # تغییر پسوند به png
+            log.info(f"دانلود عکس {pin_id[:15]}...")
+            tmp_path = f"/tmp/{pin_id}.png"
             
             if not download_image(item["img_url"], tmp_path):
-                log.info("دانلود عکس ناموفق بود.")
                 continue
 
-            log.info("دانلود موفق! در حال ساخت کپشن...")
             caption = generate_caption(item["title"], keyword)
-            
-            log.info("در حال ارسال به ایتا...")
             if send_to_eitaa(tmp_path, caption):
                 mark_sent(conn, pin_id)
                 sent_count += 1
