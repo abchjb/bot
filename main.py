@@ -11,12 +11,10 @@ from pinterest_downloader import Pinterest
 # ============ تنظیمات ============
 EITAA_TOKEN = os.environ.get("EITAA_TOKEN")
 EITAA_CHAT_ID = os.environ.get("EITAA_CHAT_ID")
-# دیگر نیازی به RAPIDAPI_KEY نیست
 
 PINTEREST_KEYWORDS = ["hijab", "حجاب", "hijab fashion", "modest fashion"]
-MAX_POSTS_PER_RUN = 2
-MIN_VIDEO_SIZE = 100 * 1024       # 100 KB
-MAX_VIDEO_SIZE = 45 * 1024 * 1024  # 45 MB
+MAX_POSTS_PER_RUN = 1  # در هر اجرا فقط ۱ ویدیو ارسال شود تا مطمئن شویم کار می‌کند
+MAX_PINS_TO_CHECK = 5  # فقط ۵ پین اول را بررسی کن (نه ۲۵ تا)
 DB_PATH = "bot.db"
 
 # ============ لاگ ============
@@ -41,21 +39,17 @@ def mark_sent(conn, pin_id):
     conn.execute("INSERT OR REPLACE INTO sent_pins (pin_id, sent_at) VALUES (?, ?)", (pin_id, datetime.utcnow().isoformat()))
     conn.commit()
 
-# ============ جستجو و دانلود با pinterest-downloader ============
+# ============ جستجو با pinterest-downloader ============
 p = Pinterest()
 
-def search_videos(keyword, limit=25):
-    """جستجوی ویدیوها با کتابخانه pinterest-downloader"""
+def search_videos(keyword, limit=10):
     try:
-        # scope="videos" باعث می‌شود فقط ویدیوها برگردند
         result = p.search(keyword, page_size=limit, scope="videos")
         if not result.get("ok"):
-            log.warning(f"خطا در جستجو '{keyword}': {result.get('error', {}).get('message')}")
             return []
         
         videos = []
         for pin in result.get("pins", []):
-            # اطمینان از اینکه پین ویدیو است
             if pin.get("media_type") == "video" and pin.get("id"):
                 videos.append({
                     "pin_id": str(pin["id"]),
@@ -68,17 +62,13 @@ def search_videos(keyword, limit=25):
         return []
 
 def download_pin_video(pin_id, out_path):
-    """دانلود ویدیو با استفاده از pin_id"""
     try:
         result = p.download_pin(pin_id, path=os.path.dirname(out_path))
         if not result.get("ok"):
             return False
         
-        # کتابخانه فایل را با نام pin_id و پسوند مناسب ذخیره می‌کند
-        # باید مسیر واقعی فایل دانلود شده را پیدا کنیم
         downloaded_path = result.get("path")
         if downloaded_path and os.path.exists(downloaded_path):
-            # انتقال به مسیر مورد نظر ما
             os.rename(downloaded_path, out_path)
             return True
         return False
@@ -130,7 +120,13 @@ def main():
         
         videos = search_videos(keyword)
         log.info(f"یافت شد: {len(videos)} ویدیو")
+        
+        # انتخاب تصادفی از بین ویدیوها
         random.shuffle(videos)
+        
+        # فقط تعداد محدودی را بررسی می‌کنیم
+        videos = videos[:MAX_PINS_TO_CHECK]
+        log.info(f"بررسی {len(videos)} ویدیو از این لیست...")
 
         for video in videos:
             if sent_count >= MAX_POSTS_PER_RUN: break
@@ -138,25 +134,29 @@ def main():
             pin_id = video["pin_id"]
             if is_sent(conn, pin_id): continue
 
-            log.info(f"دانلود ویدیو {pin_id}...")
+            log.info(f"تلاش برای دانلود ویدیو {pin_id[:15]}...")
             tmp_path = f"/tmp/{pin_id}.mp4"
             
+            # دانلود
             if not download_pin_video(pin_id, tmp_path):
-                continue
+                log.info("دانلود ناموفق بود یا فایل ویدیو نبود. می‌رویم سراغ بعدی...")
+                continue # اگر ویدیو نبود یا دانلود نشد، برو سراغ بعدی
 
-            # بررسی حجم فایل
-            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < MIN_VIDEO_SIZE:
+            # بررسی حجم
+            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 100 * 1024:
                 if os.path.exists(tmp_path): os.remove(tmp_path)
-                continue
-            if os.path.getsize(tmp_path) > MAX_VIDEO_SIZE:
-                os.remove(tmp_path)
+                log.info("حجم فایل خیلی کم بود (احتمالاً عکس بود).")
                 continue
 
+            log.info("دانلود موفق! در حال ساخت کپشن...")
             caption = generate_caption(video["title"], keyword)
+            
+            log.info("در حال ارسال به ایتا...")
             if send_to_eitaa(tmp_path, caption):
                 mark_sent(conn, pin_id)
                 sent_count += 1
-                time.sleep(5)
+                log.info(f"یک ویدیو با موفقیت ارسال شد. استراحت کوتاه...")
+                time.sleep(10) # استراحت بعد از هر ارسال
 
             if os.path.exists(tmp_path): os.remove(tmp_path)
 
