@@ -1,11 +1,11 @@
 import os
 import re
 import time
+import json
 import sqlite3
 import random
 import logging
 import requests
-import shutil
 from datetime import datetime
 from pinterest_downloader import Pinterest
 
@@ -17,13 +17,9 @@ PINTEREST_KEYWORDS = ["hijab", "حجاب", "hijab fashion", "modest fashion"]
 MAX_POSTS_PER_RUN = 1
 MAX_PINS_TO_CHECK = 5
 DB_PATH = "bot.db"
-TEMP_DIR = "/tmp/pinterest_downloads"
 
 # ============ لاگ ============
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
 # ============ دیتابیس ضدتکرار ============
@@ -43,6 +39,11 @@ def mark_sent(conn, pin_id):
 
 # ============ جستجو با pinterest-downloader ============
 p = Pinterest()
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 def search_videos(keyword, limit=10):
     try:
@@ -62,46 +63,56 @@ def search_videos(keyword, limit=10):
         log.warning(f"خطا در جستجو: {e}")
         return []
 
-def download_with_library(pin_id, final_path):
-    """دانلود با استفاده از خود کتابخانه و انتقال فایل به مسیر نهایی"""
+def extract_mp4_from_html(pin_id):
+    """رفتن به صفحه پین و استخراج لینک mp4 از داخل کدهای HTML"""
+    pin_url = f"https://www.pinterest.com/pin/{pin_id}/"
     try:
-        # پوشه موقت را خالی می‌کنیم
-        if os.path.exists(TEMP_DIR):
-            shutil.rmtree(TEMP_DIR)
-        os.makedirs(TEMP_DIR, exist_ok=True)
-
-        # از کتابخانه می‌خواهیم در این پوشه دانلود کند
-        result = p.download_pin(pin_id, path=TEMP_DIR)
+        r = requests.get(pin_url, headers=HEADERS, timeout=20)
+        r.raise_for_status()
         
-        if not result.get("ok"):
-            log.info("کتابخانه نتوانست دانلود کند.")
-            return False
-
-        # حالا ببینیم چه فایلی در پوشه موقت ساخته شده است
-        files = os.listdir(TEMP_DIR)
-        if not files:
-            log.info("هیچ فایلی دانلود نشد.")
-            return False
-
-        # اولین فایل (که ویدیو است) را برمی‌داریم
-        downloaded_file = os.path.join(TEMP_DIR, files[0])
+        # جستجوی الگوی لینک mp4 در HTML
+        # پینترست معمولاً لینک‌ها را در تگ‌های <script> یا <video> قرار می‌دهد
+        patterns = [
+            r'"url":"(https://v\.pinimg\.com/videos/[^"]+\.mp4)"',
+            r'"contentUrl":"(https://v\.pinimg\.com/videos/[^"]+\.mp4)"',
+            r'src="(https://v\.pinimg\.com/videos/[^"]+\.mp4)"'
+        ]
         
-        # بررسی حجم (حداقل ۱۰۰ کیلوبایت)
-        if os.path.getsize(downloaded_file) < 100 * 1024:
-            log.info("فایل خیلی کوچک است (احتمالاً عکس است).")
-            return False
-
-        # انتقال به مسیر نهایی
-        shutil.move(downloaded_file, final_path)
-        return True
-
+        for pattern in patterns:
+            match = re.search(pattern, r.text)
+            if match:
+                url = match.group(1)
+                # پینترست گاهی لینک‌ها را با \u002F فرار می‌دهد
+                url = url.replace("\\u002F", "/")
+                return url
+        return None
     except Exception as e:
-        log.warning(f"خطا در دانلود با کتابخانه: {e}")
+        log.warning(f"خطا در استخراج از HTML: {e}")
+        return None
+
+def download_direct(video_url, out_path):
+    """دانلود مستقیم با requests"""
+    try:
+        with requests.get(video_url, headers=HEADERS, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            size = 0
+            with open(out_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        size += len(chunk)
+                        if size > 45 * 1024 * 1024: # 45MB limit
+                            f.close()
+                            os.remove(out_path)
+                            return False
+        if size < 100 * 1024: # < 100KB
+            os.remove(out_path)
+            return False
+        return True
+    except Exception as e:
+        log.warning(f"خطای دانلود مستقیم: {e}")
+        if os.path.exists(out_path): os.remove(out_path)
         return False
-    finally:
-        # پاکسازی پوشه موقت
-        if os.path.exists(TEMP_DIR):
-            shutil.rmtree(TEMP_DIR, ignore_errors=True)
 
 # ============ تولید کپشن و ارسال ============
 def generate_caption(title, keyword):
@@ -155,18 +166,24 @@ def main():
             pin_id = video["pin_id"]
             if is_sent(conn, pin_id): continue
 
-            log.info(f"تلاش برای دانلود ویدیو {pin_id[:15]}...")
-            tmp_path = f"/tmp/{pin_id}.mp4"
+            log.info(f"تلاش برای ویدیو {pin_id[:15]}...")
             
-            # دانلود با کتابخانه
-            if not download_with_library(pin_id, tmp_path):
-                log.info("دانلود ناموفق بود. رد شدن...")
+            # مرحله ۱: استخراج لینک mp4 از HTML پین
+            video_url = extract_mp4_from_html(pin_id)
+            if not video_url:
+                log.info("لینک mp4 در صفحه پیدا نشد (احتمالاً ویدیو نیست).")
                 continue
 
+            # مرحله ۲: دانلود
+            tmp_path = f"/tmp/{pin_id}.mp4"
+            if not download_direct(video_url, tmp_path):
+                log.info("دانلود ناموفق بود.")
+                continue
+
+            # مرحله ۳: ارسال
             log.info("دانلود موفق! در حال ساخت کپشن...")
             caption = generate_caption(video["title"], keyword)
             
-            log.info("در حال ارسال به ایتا...")
             if send_to_eitaa(tmp_path, caption):
                 mark_sent(conn, pin_id)
                 sent_count += 1
