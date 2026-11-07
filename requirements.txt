@@ -1,2 +1,2 @@
 requests==2.31.0
-eitaayarbot==0.3.5
+eitaayarbot==1.0.0
